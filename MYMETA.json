@@ -1,0 +1,59 @@
+{
+   "abstract" : "TF*WebIDF calculator",
+   "author" : [
+      "pawa <pawapawa@cpan.org>"
+   ],
+   "dynamic_config" : 0,
+   "generated_by" : "Module::Install version 1.06, CPAN::Meta::Converter version 2.112150",
+   "license" : [
+      "perl_5"
+   ],
+   "meta-spec" : {
+      "url" : "http://search.cpan.org/perldoc?CPAN::Meta::Spec",
+      "version" : "2"
+   },
+   "name" : "Lingua-JA-TFWebIDF",
+   "no_index" : {
+      "directory" : [
+         "inc",
+         "t",
+         "xt"
+      ]
+   },
+   "prereqs" : {
+      "build" : {
+         "requires" : {
+            "ExtUtils::MakeMaker" : "6.59",
+            "Test::More" : "0.88"
+         }
+      },
+      "configure" : {
+         "requires" : {
+            "ExtUtils::MakeMaker" : "6.59"
+         }
+      },
+      "runtime" : {
+         "requires" : {
+            "Carp" : 0,
+            "Lingua::JA::TFIDF" : "0.04",
+            "Lingua::JA::WebIDF" : 0,
+            "List::MoreUtils" : 0,
+            "parent" : 0,
+            "perl" : "5.008001"
+         }
+      }
+   },
+   "release_status" : "stable",
+   "resources" : {
+      "bugtracker" : {
+         "web" : "https://github.com/pawa-/Lingua-JA-TFWebIDF/issues"
+      },
+      "license" : [
+         "http://dev.perl.org/licenses"
+      ],
+      "repository" : {
+         "url" : "https://github.com/pawa-/Lingua-JA-TFWebIDF"
+      }
+   },
+   "version" : "0.01"
+}

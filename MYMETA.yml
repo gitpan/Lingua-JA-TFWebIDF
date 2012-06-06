@@ -1,0 +1,33 @@
+---
+abstract: 'TF*WebIDF calculator'
+author:
+  - 'pawa <pawapawa@cpan.org>'
+build_requires:
+  ExtUtils::MakeMaker: 6.59
+  Test::More: 0.88
+configure_requires:
+  ExtUtils::MakeMaker: 6.59
+dynamic_config: 0
+generated_by: 'Module::Install version 1.06, CPAN::Meta::Converter version 2.112150'
+license: perl
+meta-spec:
+  url: http://module-build.sourceforge.net/META-spec-v1.4.html
+  version: 1.4
+name: Lingua-JA-TFWebIDF
+no_index:
+  directory:
+    - inc
+    - t
+    - xt
+requires:
+  Carp: 0
+  Lingua::JA::TFIDF: 0.04
+  Lingua::JA::WebIDF: 0
+  List::MoreUtils: 0
+  parent: 0
+  perl: 5.008001
+resources:
+  bugtracker: https://github.com/pawa-/Lingua-JA-TFWebIDF/issues
+  license: http://dev.perl.org/licenses
+  repository: https://github.com/pawa-/Lingua-JA-TFWebIDF
+version: 0.01
