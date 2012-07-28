@@ -12,7 +12,7 @@ use Text::MeCab;
 use Lingua::JA::Halfwidth::Katakana;
 use Lingua::JA::TFWebIDF::Result;
 
-our $VERSION = '0.31';
+our $VERSION = '0.32';
 
 
 sub new
@@ -559,6 +559,8 @@ pawa E<lt>pawapawa@cpan.orgE<gt>
 =head1 SEE ALSO
 
 L<Lingua::JA::WebIDF>
+
+L<Lingua::JA::WebIDF::Driver::TokyoTyrant>
 
 =head1 LICENSE
 
