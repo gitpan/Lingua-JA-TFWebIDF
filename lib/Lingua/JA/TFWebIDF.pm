@@ -12,7 +12,7 @@ use Text::MeCab;
 use Lingua::JA::Halfwidth::Katakana;
 use Lingua::JA::TFWebIDF::Result;
 
-our $VERSION = '0.33';
+our $VERSION = '0.34';
 
 
 sub new
@@ -278,8 +278,10 @@ sub _calc_tf
                 next if length $word == 1 && $word =~ /[\p{InHiragana}\p{InKatakana}\p{InHalfwidthKatakana}]/;
 
                 $data->{$word}{tf}++;
-                $data->{$word}{unknown} = 1 if $unknown;
-                $data->{$word}{info}    = $info;
+                $data->{$word}{info} = $info;
+
+                if ($unknown) { $data->{$word}{unknown} = 1; }
+                else          { $data->{$word}{unknown} = 0; }
             }
         }
         else
