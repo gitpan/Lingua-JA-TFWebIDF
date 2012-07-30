@@ -12,7 +12,7 @@ use Text::MeCab;
 use Lingua::JA::Halfwidth::Katakana;
 use Lingua::JA::TFWebIDF::Result;
 
-our $VERSION = '0.35';
+our $VERSION = '0.36';
 
 
 sub new
@@ -36,11 +36,12 @@ sub new
 
     $options{term_length_min}   = defined $args{term_length_min}   ? delete $args{term_length_min}   : 2;
     $options{term_length_max}   = defined $args{term_length_max}   ? delete $args{term_length_max}   : 30;
-    $options{concatenation_max} = defined $args{concatenation_max} ? delete $args{concatenation_max} : 30;
+    $options{concat_max}        = defined $args{concat_max}        ? delete $args{concat_max}        : 30;
     $options{tf_min}            = defined $args{tf_min}            ? delete $args{tf_min}            : 1;
     $options{df_min}            = defined $args{df_min}            ? delete $args{df_min}            : 0;
     $options{df_max}            = defined $args{df_max}            ? delete $args{df_max}            : 250_0000_0000;
     $options{fetch_unk_word_df} = defined $args{fetch_unk_word_df} ? delete $args{fetch_unk_word_df} : 0;
+    $options{db_auto}           = defined $args{db_auto}           ? delete $args{db_auto}           : 1;
 
     my $self = $class->SUPER::new(\%args);
 
@@ -55,14 +56,14 @@ sub new
     @{ $self->{ng_word}     }{ @{ $options{ng_word}     } } = ();
 
     $self->{$_} = $options{$_}
-        for qw/term_length_min term_length_max concatenation_max tf_min df_min df_max fetch_unk_word_df/;
+        for qw/term_length_min term_length_max concat_max tf_min df_min df_max fetch_unk_word_df/;
 
     return $self;
 }
 
 sub tfidf
 {
-    my ($self, $args) = @_;
+    my ($self, $args, $db_auto_arg) = @_;
 
     if (!defined $args)
     {
@@ -71,9 +72,10 @@ sub tfidf
     }
 
 
-    my $tf_min = $self->{tf_min};
-    my $df_min = $self->{df_min};
-    my $df_max = $self->{df_max};
+    my $tf_min  = $self->{tf_min};
+    my $df_min  = $self->{df_min};
+    my $df_max  = $self->{df_max};
+    my $db_auto = ($self->{db_auto} || $db_auto_arg) ? 1 : 0;
 
     my ($df_sum, $df_num, @failed_to_fetch_df);
 
@@ -85,8 +87,11 @@ sub tfidf
         my $term_length_max = $self->{term_length_max};
         my $ng_word         = $self->{ng_word};
 
-        if ($self->{fetch_df}) { $self->db_open('write'); }
-        else                   { $self->db_open('read'); }
+        if ($db_auto)
+        {
+            if ($self->{fetch_df}) { $self->db_open('write'); }
+            else                   { $self->db_open('read');  }
+        }
 
         for my $word (keys %{$args})
         {
@@ -126,8 +131,11 @@ sub tfidf
         my $fetch_df          = $self->{fetch_df};
         my $fetch_unk_word_df = $self->{fetch_unk_word_df};
 
-        if ($fetch_df || $fetch_unk_word_df) { $self->db_open('write'); }
-        else                                 { $self->db_open('read'); }
+        if ($db_auto)
+        {
+            if ($fetch_df || $fetch_unk_word_df) { $self->db_open('write'); }
+            else                                 { $self->db_open('read'); }
+        }
 
         for my $word (keys %{$data})
         {
@@ -216,7 +224,7 @@ sub tfidf
         $data->{$word}{tfidf} = $data->{$word}{tf} * $data->{$word}{idf};
     }
 
-    $self->db_close;
+    $self->db_close if $db_auto;
 
     return Lingua::JA::TFWebIDF::Result->new($data);
 }
@@ -240,15 +248,15 @@ sub _calc_tf
 {
     my ($self, $text_ref) = @_;
 
-    my $data              = {};
-    my $mecab             = $self->{mecab};
-    my $pos1_filter       = $self->{pos1_filter};
-    my $pos2_filter       = $self->{pos2_filter};
-    my $pos3_filter       = $self->{pos3_filter};
-    my $ng_word           = $self->{ng_word};
-    my $concatenation_max = $self->{concatenation_max};
-    my $term_length_min   = $self->{term_length_min};
-    my $term_length_max   = $self->{term_length_max};
+    my $data             = {};
+    my $mecab            = $self->{mecab};
+    my $pos1_filter      = $self->{pos1_filter};
+    my $pos2_filter      = $self->{pos2_filter};
+    my $pos3_filter      = $self->{pos3_filter};
+    my $ng_word          = $self->{ng_word};
+    my $concat_max       = $self->{concat_max};
+    my $term_length_min  = $self->{term_length_min};
+    my $term_length_max  = $self->{term_length_max};
 
     my ($concatenated_word, @concatenated_infos, @concatenated_unknowns);
     my $concat_cnt = 0;
@@ -261,7 +269,7 @@ sub _calc_tf
 
         my ($word, $info, $unknown) = split(/\t/, $record, 3);
 
-        if ( ! $concatenation_max )
+        if ( ! $concat_max )
         {
             next unless $info;
             my ($pos, $pos1, $pos2, $pos3) = split(/,/, $info, 5);
@@ -338,7 +346,7 @@ sub _calc_tf
                                 && !(length $word < $term_length_min && !length $concatenated_word)
                                 && !(length $word > $term_length_max)
                                 && !(length $word == 1 && $word =~ /[\p{InHiragana}\p{InKatakana}\p{InHalfwidthKatakana}]/)
-                                && $concat_cnt <= $concatenation_max
+                                && $concat_cnt <= $concat_max
                             )
                         )
                     )
@@ -432,7 +440,7 @@ my ($appid, $word, @ng_words, $text);
       df_max            => 500_0000,
       ng_word           => [qw/編集 本人 自身 自分 たち さん/],
       fetch_unk_word_df => 0,
-      concatenation_max => 100,
+      concat_max        => 100,
   );
 
   my %tf = (
@@ -486,11 +494,12 @@ The following configuration is used if you don't set %config.
   ng_word             []
   term_length_min     2
   term_length_max     30
-  concatenation_max   30
+  concat_max          30
   tf_min              1
   df_min              0
   df_max              250_0000_0000
   fetch_unk_word_df   0
+  db_auto             1
 
   idf_type            1
   api                 'Yahoo'
@@ -508,7 +517,7 @@ The following configuration is used if you don't set %config.
 
 The filters of '品詞細分類'.
 
-=item concatenation_max => $num
+=item concat_max => $num
 
 The maximum value of the number of term concatenations.
 
@@ -532,6 +541,10 @@ dictionary of MeCab if DF score of its word is not fetched yet.
 1: If fetch_df is 1, fetches DF score of unk word.
 
 0: The average DF score is used.
+
+=item db_auto => 0 || 1
+
+If 1 is specified, (open|close)s the DF(Document Frequency) database automatically.
 
 =item idf_type, api, appid, driver, df_file, expires_in, documents, Furl_HTTP
 
