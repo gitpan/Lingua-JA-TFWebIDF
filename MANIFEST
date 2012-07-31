@@ -24,6 +24,7 @@ t/10_ng_word.t
 t/16_term_length_min_max.t
 t/17_tf_min.t
 t/18_df_min_max.t
+t/21_db_auto.t
 xt/01_podspell.t
 xt/02_perlcritic.t
 xt/03_pod.t
