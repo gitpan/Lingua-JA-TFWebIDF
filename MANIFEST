@@ -1,4 +1,6 @@
 Changes
+df/flagged_utf8.st
+df/utf8.tch
 inc/Module/Install.pm
 inc/Module/Install/AuthorTests.pm
 inc/Module/Install/Base.pm
@@ -25,6 +27,7 @@ t/16_term_length_min_max.t
 t/17_tf_min.t
 t/18_df_min_max.t
 t/21_db_auto.t
+t/22_no_guess_df.t
 xt/01_podspell.t
 xt/02_perlcritic.t
 xt/03_pod.t
@@ -39,4 +42,5 @@ xt/17_tf_min.t
 xt/18_df_min_max.t
 xt/19_data_structure.t
 xt/20_fetch_unk_word_df.t
+xt/22_no_guess_df.t
 xt/perlcriticrc

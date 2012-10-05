@@ -26,7 +26,7 @@ no_index:
 requires:
   Carp: 0
   Lingua::JA::Halfwidth::Katakana: 0
-  Lingua::JA::WebIDF: 0.32
+  Lingua::JA::WebIDF: 0.4
   Text::MeCab: 0.20013
   parent: 0
   perl: 5.8.1
@@ -34,4 +34,4 @@ resources:
   bugtracker: https://github.com/pawa-/Lingua-JA-TFWebIDF/issues
   license: http://dev.perl.org/licenses
   repository: https://github.com/pawa-/Lingua-JA-TFWebIDF
-version: 0.37
+version: 0.40

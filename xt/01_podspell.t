@@ -11,6 +11,7 @@ Lingua::JA::TFWebIDF
 MeCab
 NG
 TF
+tf
 df
 idf
 API
@@ -18,3 +19,4 @@ tfidf
 api
 appid
 unk
+WebDF

@@ -7,18 +7,47 @@ use utf8;
 
 use parent 'Lingua::JA::WebIDF';
 use Carp ();
-use Encode qw/decode_utf8/;
+use Encode ();
 use Text::MeCab;
 use Lingua::JA::Halfwidth::Katakana;
 use Lingua::JA::TFWebIDF::Result;
 
-our $VERSION = '0.37';
+our $VERSION = '0.40';
+
+my $ENCODER = Encode::find_encoding(Text::MeCab::ENCODING);
+my $USE_AVERAGE_DF_MAX_TERM_LENGTH = 20;
+
+our %TERM_LENGTH_TO_AVERAGE_DF = (
+    1  => 60524830,
+    2  => 6424266,
+    3  => 4346419,
+    4  => 3328289,
+    5  => 1740237,
+    6  => 1877898,
+    7  => 2020528,
+    8  => 1499235,
+    9  => 2680325,
+    10 => 837733,
+    11 => 597349,
+    12 => 317074,
+    13 => 67738,
+    14 => 25927,
+    15 => 17503,
+    16 => 16813,
+    17 => 9999,
+    18 => 5999,
+    19 => 4861,
+    20 => 2999,
+    'verylong' => 999,
+);
 
 
 sub new
 {
     my $class = shift;
     my %args  = (ref $_[0] eq 'HASH' ? %{$_[0]} : @_);
+
+    $args{verbose} = 0 unless defined $args{verbose};
 
     my %options;
 
@@ -31,7 +60,7 @@ sub new
     $options{pos1_filter}
         = defined $args{pos1_filter}
         ? delete $args{pos1_filter}
-        : [qw/非自立 代名詞 数 ナイ形容詞語幹 副詞可能 接尾/]
+        : [qw/非自立 代名詞 ナイ形容詞語幹 副詞可能/]
         ;
 
     $options{term_length_min}   = defined $args{term_length_min}   ? delete $args{term_length_min}   : 2;
@@ -42,21 +71,22 @@ sub new
     $options{df_max}            = defined $args{df_max}            ? delete $args{df_max}            : 250_0000_0000;
     $options{fetch_unk_word_df} = defined $args{fetch_unk_word_df} ? delete $args{fetch_unk_word_df} : 0;
     $options{db_auto}           = defined $args{db_auto}           ? delete $args{db_auto}           : 1;
+    $options{guess_df}          = defined $args{guess_df}          ? delete $args{guess_df}          : 1;
 
     my $self = $class->SUPER::new(\%args);
 
     $self->{mecab} = Text::MeCab->new(
-        { node_format => '%m\t%H\n', unk_format => '%m\t%H\tUNK\n' }
+        { node_format => '%m\t%H', unk_format => '%m\t%H\tUNK' }
     );
 
-    # from array to hash
+    # change array to hash
     @{ $self->{pos1_filter} }{ @{ $options{pos1_filter} } } = ();
     @{ $self->{pos2_filter} }{ @{ $options{pos2_filter} } } = ();
     @{ $self->{pos3_filter} }{ @{ $options{pos3_filter} } } = ();
     @{ $self->{ng_word}     }{ @{ $options{ng_word}     } } = ();
 
     $self->{$_} = $options{$_}
-        for qw/term_length_min term_length_max concat_max tf_min df_min df_max fetch_unk_word_df/;
+        for qw/term_length_min term_length_max concat_max tf_min df_min df_max fetch_unk_word_df db_auto guess_df/;
 
     return $self;
 }
@@ -71,27 +101,27 @@ sub tfidf
         return Lingua::JA::TFWebIDF::Result->new({});
     }
 
+    my $tf_min   = $self->{tf_min};
+    my $df_min   = $self->{df_min};
+    my $df_max   = $self->{df_max};
+    my $db_auto  = ($self->{db_auto} || $db_auto_arg) ? 1 : 0;
+    my $guess_df = $self->{guess_df};
 
-    my $tf_min  = $self->{tf_min};
-    my $df_min  = $self->{df_min};
-    my $df_max  = $self->{df_max};
-    my $db_auto = ($self->{db_auto} || $db_auto_arg) ? 1 : 0;
-
-    my ($df_sum, $df_num, @failed_to_fetch_df);
+    my @failed_to_fetch_df;
 
     my $data = {};
+
+    if ($db_auto)
+    {
+        if ($self->{fetch_df}) { $self->db_open('write'); }
+        else                   { $self->db_open('read');  }
+    }
 
     if (ref $args eq 'HASH')
     {
         my $term_length_min = $self->{term_length_min};
         my $term_length_max = $self->{term_length_max};
         my $ng_word         = $self->{ng_word};
-
-        if ($db_auto)
-        {
-            if ($self->{fetch_df}) { $self->db_open('write'); }
-            else                   { $self->db_open('read');  }
-        }
 
         for my $word (keys %{$args})
         {
@@ -116,26 +146,19 @@ sub tfidf
                 next;
             }
 
-            $df_sum += $df;
-            $df_num++;
-
             $data->{$word}{df}    = $df;
-            $data->{$word}{idf}   = $self->idf($data->{$word}{df}, 'df');
+            $data->{$word}{idf}   = $self->idf($df, 'df');
             $data->{$word}{tfidf} = $data->{$word}{tf} * $data->{$word}{idf};
         }
     }
     else
     {
+        if (ref $args eq 'SCALAR') { $data = $self->_calc_tf($args);  }
+        else                       { $data = $self->_calc_tf(\$args); }
+
         my @unknowns;
-        $data                 = $self->_calc_tf(\$args);
         my $fetch_df          = $self->{fetch_df};
         my $fetch_unk_word_df = $self->{fetch_unk_word_df};
-
-        if ($db_auto)
-        {
-            if ($fetch_df || $fetch_unk_word_df) { $self->db_open('write'); }
-            else                                 { $self->db_open('read'); }
-        }
 
         for my $word (keys %{$data})
         {
@@ -145,10 +168,7 @@ sub tfidf
                 next;
             }
 
-            if (
-               !$data->{$word}{unknown}
-            || ( ref $data->{$word}{unknown} eq 'ARRAY' && scalar @{ $data->{$word}{unknown} } == 1 && $data->{$word}{unknown}[0] == 0 )
-            )
+            if ( _is_known($word, $data) )
             {
                 my $df = $self->df($word);
 
@@ -164,11 +184,8 @@ sub tfidf
                     next;
                 }
 
-                $df_sum += $df;
-                $df_num++;
-
                 $data->{$word}{df}    = $df;
-                $data->{$word}{idf}   = $self->idf($data->{$word}{df}, 'df');
+                $data->{$word}{idf}   = $self->idf($df, 'df');
                 $data->{$word}{tfidf} = $data->{$word}{tf} * $data->{$word}{idf};
             }
             else { push(@unknowns, $word); }
@@ -206,22 +223,29 @@ sub tfidf
                 next;
             }
 
-            $df_sum += $df;
-            $df_num++;
-
             $data->{$word}{df}    = $df;
-            $data->{$word}{idf}   = $self->idf($data->{$word}{df}, 'df');
+            $data->{$word}{idf}   = $self->idf($df, 'df');
             $data->{$word}{tfidf} = $data->{$word}{tf} * $data->{$word}{idf};
         }
     }
 
     for my $word (@failed_to_fetch_df)
     {
-        if ($df_num) { $data->{$word}{df} = int($df_sum / $df_num); }
-        else         { $data->{$word}{df} = $df_min;                }
+        if ($guess_df)
+        {
+            my $df = _guess_df($word);
 
-        $data->{$word}{idf}   = $self->idf($data->{$word}{df}, 'df');
-        $data->{$word}{tfidf} = $data->{$word}{tf} * $data->{$word}{idf};
+            if ($df < $df_min || $df > $df_max)
+            {
+                delete $data->{$word};
+                next;
+            }
+
+            $data->{$word}{df}    = $df;
+            $data->{$word}{idf}   = $self->idf($df, 'df');
+            $data->{$word}{tfidf} = $data->{$word}{tf} * $data->{$word}{idf};
+        }
+        else { delete $data->{$word}; }
     }
 
     $self->db_close if $db_auto;
@@ -239,7 +263,10 @@ sub tf
         return Lingua::JA::TFWebIDF::Result->new({});
     }
 
-    my $data = $self->_calc_tf(\$text);
+    my $data;
+
+    if (ref $text eq 'SCALAR') { $data = $self->_calc_tf($text);  }
+    else                       { $data = $self->_calc_tf(\$text); }
 
     return Lingua::JA::TFWebIDF::Result->new($data);
 }
@@ -247,6 +274,8 @@ sub tf
 sub _calc_tf
 {
     my ($self, $text_ref) = @_;
+
+    $$text_ref =~ tr/ \n/　/;
 
     my $data             = {};
     my $mecab            = $self->{mecab};
@@ -258,14 +287,15 @@ sub _calc_tf
     my $term_length_min  = $self->{term_length_min};
     my $term_length_max  = $self->{term_length_max};
 
-    my ($concatenated_word, @concatenated_infos, @concatenated_unknowns);
+    my (@concated_infos, @concated_unknowns);
+    my $concated_word = '';
     my $concat_cnt = 0;
+
+    $$text_ref = $ENCODER->encode($$text_ref);
 
     for (my $node = $mecab->parse($$text_ref); $node; $node = $node->next)
     {
-        my $record = decode_utf8( $node->format($mecab) );
-
-        chomp $record;
+        my $record = $ENCODER->decode( $node->format($mecab) );
 
         my ($word, $info, $unknown) = split(/\t/, $record, 3);
 
@@ -294,9 +324,6 @@ sub _calc_tf
         }
         else
         {
-            my $next;
-            $next = $node->next->surface if $node->next;
-
             my ($pos, $pos1, $pos2, $pos3);
             my $is_ng_word = 0;
 
@@ -313,97 +340,150 @@ sub _calc_tf
                 {
                     $is_ng_word = 1;
                 }
-            }
 
-            if (
-                $info
+                my $next = $node->next->surface;
+                $next = (defined $next) ? $ENCODER->decode($next) : '';
 
-                &&
-
-                (
-
-                    ( length $concatenated_word && ($word eq '-' || $word eq '・') )
-
-                    ||
-
-                    (
-                        ($pos eq '名詞')
-
-                        &&
-
-                        (
-                            (!$is_ng_word && defined $next && $next eq '-')
-
-                            ||
-
-                            (!exists $ng_word->{$word} && $pos1 eq 'サ変接続' && !$unknown)
-
-                            ||
-
-                            (
-                                   !$is_ng_word
-                                && !($unknown && $pos1 eq 'サ変接続')
-                                && !(length $word < $term_length_min && !length $concatenated_word)
-                                && !(length $word > $term_length_max)
-                                && !(length $word == 1 && $word =~ /[\p{InHiragana}\p{InKatakana}\p{InHalfwidthKatakana}]/)
-                                && $concat_cnt <= $concat_max
-                            )
-                        )
-                    )
-                )
-            )
-            {
-                $concatenated_word .= $word;
-                push(@concatenated_infos, $info);
-
-                if ($unknown) { push(@concatenated_unknowns, 1); }
-                else          { push(@concatenated_unknowns, 0); }
-
-                $concat_cnt++;
-            }
-            elsif (length $concatenated_word)
-            {
-                my $last = substr($concatenated_word, (length $concatenated_word) - 1, 1);
-
-                if (length $concatenated_word >= $term_length_min && length $concatenated_word <= $term_length_max)
+                if ( _is_concatable($word, $next, $concated_word, $pos, $pos1, $unknown, $is_ng_word, $ng_word) )
                 {
-                    if ($last eq '-' || $last eq '・')
-                    {
-                        if (length $concatenated_word > $term_length_min)
-                        {
-                            chop $concatenated_word;
-                            pop @concatenated_unknowns;
-                            pop @concatenated_infos;
+                    $concated_word .= $word;
+                    push(@concated_infos, $info);
 
-                            $data->{$concatenated_word}{tf}++;
-                            @{ $data->{$concatenated_word}->{unknown} } = @concatenated_unknowns;
-                            @{ $data->{$concatenated_word}->{info}    } = @concatenated_infos;
-                        }
-                    }
-                    else
+                    if ($unknown) { push(@concated_unknowns, 1); }
+                    else          { push(@concated_unknowns, 0); }
+
+                    $concat_cnt++;
+
+                    if ( $concat_cnt > $concat_max || (!length $next && length $concated_word) )
                     {
-                        unless (
-                                exists $pos1_filter->{'サ変接続'}
-                             && scalar @concatenated_infos == 1
-                             && (split(/,/, $concatenated_infos[0]))[1] eq 'サ変接続'
-                        )
-                        {
-                            $data->{$concatenated_word}{tf}++;
-                            @{ $data->{$concatenated_word}->{unknown} } = @concatenated_unknowns;
-                            @{ $data->{$concatenated_word}->{info}    } = @concatenated_infos;
-                        }
+                        $self->_store_concated_word(\$concated_word, \@concated_infos, \@concated_unknowns, $data);
+                        $concat_cnt = 0;
                     }
                 }
-
-                $concatenated_word     = '';
-                @concatenated_infos    = ();
-                @concatenated_unknowns = ();
+                elsif (length $concated_word)
+                {
+                    $self->_store_concated_word(\$concated_word, \@concated_infos, \@concated_unknowns, $data);
+                    $concat_cnt = 0;
+                }
+            }
+            elsif (length $concated_word)
+            {
+                $self->_store_concated_word(\$concated_word, \@concated_infos, \@concated_unknowns, $data);
                 $concat_cnt = 0;
             }
         }
     }
 
     return $data;
+}
+
+sub _is_known
+{
+    my ($word, $data) = @_;
+
+    return 1 unless $data->{$word}{unknown};
+    return 1 if ref $data->{$word}{unknown} eq 'ARRAY' && scalar @{ $data->{$word}{unknown} } == 1 && $data->{$word}{unknown}[0] == 0;
+
+    return 0;
+}
+
+sub _guess_df
+{
+    my $word = shift;
+
+    my $df;
+
+    if (length $word <= $USE_AVERAGE_DF_MAX_TERM_LENGTH)
+    {
+        $df = $TERM_LENGTH_TO_AVERAGE_DF{ length $word };
+    }
+    else { $df = $TERM_LENGTH_TO_AVERAGE_DF{verylong}; }
+
+    return $df;
+}
+
+sub _is_concatable
+{
+    my ($word, $next, $concated_word, $pos, $pos1, $unknown, $is_ng_word, $ng_word) = @_;
+
+    if ($pos eq '名詞')
+    {
+        if ( !$is_ng_word )
+        {
+            return 1 if ($next eq '-' || $next eq '・');
+            return 1 if
+                   !($unknown && $pos1 eq 'サ変接続')
+                && !(length $word == 1 && $word =~ /[\p{InHiragana}\p{InKatakana}\p{InHalfwidthKatakana}]/);
+        }
+
+        if ($pos1 eq 'サ変接続')
+        {
+            return 1 if ( !exists $ng_word->{$word} && !$unknown );
+        }
+     }
+
+    if (length $concated_word)
+    {
+        return 1 if ( ($word eq '-' || $word eq '・') && ($next ne '-' && $next ne '・') && $concated_word !~ /^(?:\p{Han}+|[0-9]+)$/ )
+    }
+
+    return 0;
+}
+
+sub _store_concated_word
+{
+    my ($self, $concated_word, $concated_infos, $concated_unknowns, $data) = @_;
+
+    my $term_length_min = $self->{term_length_min};
+    my $term_length_max = $self->{term_length_max};
+
+    my $last = substr($$concated_word, (length $$concated_word) - 1, 1);
+
+    if ($last eq '-' || $last eq '・')
+    {
+        chop $$concated_word;
+        pop @{ $concated_unknowns };
+        pop @{ $concated_infos };
+    }
+
+    if (length $$concated_word >= $term_length_min && length $$concated_word <= $term_length_max)
+    {
+        if (length $$concated_word == 1 && $$concated_word =~ /[\p{InHiragana}\p{InKatakana}\p{InHalfwidthKatakana}]/ )
+        {
+            # 平仮名・片仮名・半角片仮名の１文字は認めない
+        }
+        else
+        {
+            my $last_pos1 = (split(/,/, $concated_infos->[-1], 3))[1];
+
+            if ( scalar @{$concated_infos} == 1 && ($last_pos1 eq '数' || $last_pos1 eq '接尾') )
+            {
+                # 数 ”オンリー” はいかなる時も認めない
+                # 00 とか 12345 とか抽出できても誰得？
+                # NGワードに「年」などがあれば「2010年」なども飛ばせる
+                # 接尾 "オンリー" もいかなる時も認めない
+            }
+            elsif (exists $self->{pos1_filter}{'サ変接続'} && $last_pos1 eq 'サ変接続')
+            {
+                # 例えば、「情報統合思念」という複合名詞がここに来た場合、
+                # サ変接続でない「情報」も飛ばしてしまう。
+                # この「情報」はサ変接続の複合名詞の一部だから飛ばすべきか、
+                # 結合前は一般名詞だから飛ばすべきでないかは微妙なところである。
+                # 飛ばしたくない場合はこの辺にコードを加筆する必要あり。
+                # 「情報統合思念体」は最後の「体」がサ変接続でないのでここには来ない。
+            }
+            else
+            {
+                $data->{$$concated_word}{tf}++;
+                @{ $data->{$$concated_word}->{unknown} } = @{ $concated_unknowns };
+                @{ $data->{$$concated_word}->{info}    } = @{ $concated_infos };
+            }
+        }
+    }
+
+    $$concated_word = '';
+    @{ $concated_unknowns } = ();
+    @{ $concated_infos    } = ();
 }
 
 1;
@@ -417,7 +497,7 @@ __END__
 Lingua::JA::TFWebIDF - TF*WebIDF calculator
 
 =for test_synopsis
-my ($appid, $word, @ng_words, $text);
+my ($text);
 
 =head1 SYNOPSIS
 
@@ -427,20 +507,8 @@ my ($appid, $word, @ng_words, $text);
   use Data::Printer;
 
   my $tfidf = Lingua::JA::TFWebIDF->new(
-      api               => 'YahooPremium',
-      appid             => $appid,
-      fetch_df          => 1,
-      Furl_HTTP         => { timeout => 3 },
-      driver            => 'TokyoCabinet',
-      df_file           => './yahoo.tch',
-      pos1_filter       => [qw/非自立 代名詞 数 ナイ形容詞語幹 副詞可能 サ変接続/],
-      term_length_min   => 2,
-      tf_min            => 1,
-      df_min            => 1_0000,
-      df_max            => 500_0000,
-      ng_word           => [qw/編集 本人 自身 自分 たち さん/],
-      fetch_unk_word_df => 0,
-      concat_max        => 100,
+      pos1_filter => [qw/非自立 代名詞 ナイ形容詞語幹 副詞可能 サ変接続/],
+      ng_word     => [qw/編集 本人 自身 自分 たち さん 年 月 日/],
   );
 
   my %tf = (
@@ -458,23 +526,23 @@ my ($appid, $word, @ng_words, $text);
 
   for my $result (@{ $tfidf->tfidf($text)->list(20) })
   {
-      my ($word, $score) = each %{$result};
+      my ($word, $weight) = each %{$result};
 
-      say "$word: $score";
+      say "$word: $weight";
   }
 
 
 =head1 DESCRIPTION
 
-Lingua::JA::TFWebIDF calculates TF*WebIDF scores.
+Lingua::JA::TFWebIDF calculates TF*WebIDF weight.
 
 Compared with L<Lingua::JA::TFIDF>, this module has the following advantages.
 
 =over 4
 
-=item * supports Tokyo Cabinet, Bing API and many options.
+=item * supports Tokyo Cabinet and many options.
 
-=item * tfidf function accepts \%tf. (This eases the use of other morphological analyzers.)
+=item * tfidf method accepts \%tf. (This facilitates the use of other morphological analyzers.)
 
 =back
 
@@ -488,7 +556,7 @@ The following configuration is used if you don't set %config.
 
   KEY                 DEFAULT VALUE
   -----------         ---------------
-  pos1_filter         [qw/非自立 代名詞 数 ナイ形容詞語幹 副詞可能 接尾/]
+  pos1_filter         [qw/非自立 代名詞 ナイ形容詞語幹 副詞可能/]
   pos2_filter         []
   pos3_filter         []
   ng_word             []
@@ -500,16 +568,18 @@ The following configuration is used if you don't set %config.
   df_max              250_0000_0000
   fetch_unk_word_df   0
   db_auto             1
+  guess_df            1
 
   idf_type            1
-  api                 'Yahoo'
+  api                 'YahooPremium'
   appid               undef
-  driver              'Storable'
-  df_file             undef
-  fetch_df            1
+  driver              'TokyoCabinet'
+  df_file             './df.tch'
+  fetch_df            0
   expires_in          365
   documents           250_0000_0000
   Furl_HTTP           undef
+  verbose             0
 
 =over 4
 
@@ -524,29 +594,52 @@ The maximum value of the number of term concatenations.
 If 2 is specified, 2 consecutive nouns are concatenated.
 I recommend that you specify a large value or 0.
 
-If half width spaces or tabs are ignored,
-you need to replace them with full width spaces.
-
 =item fetch_df => 0 || 1
 
-1: Fetches the DF score of a word which exists in the
-dictionary of MeCab if DF score of its word is not fetched yet.
+If df_file has the (Web)DF and it has not expired yet,
+it is used.
 
-0: The average DF score is used.
+If it is not so,
+
+1: fetches the DF of the word which exists in the
+dictionary of MeCab.
+
+0: if guess_df is 1, guesses the DF.
+
+if guess_df is 0, does not give TF*WebIDF weight.
 
 =item fetch_unk_word_df => 0 || 1
 
 'unk word' is a word which not exists in the dictionary of MeCab.
 
-1: If fetch_df is 1, fetches DF score of unk word.
+If df_file has the (Web)DF and it has not expired yet,
+it is used.
 
-0: The average DF score is used.
+If it is not so,
+
+1: fetches the DF of the unk word if fetch_df is 1.
+
+0: if guess_df is 1, guesses the DF.
+
+if guess_df is 0, does not give TF*WebIDF weight.
 
 =item db_auto => 0 || 1
 
-If 1 is specified, (open|close)s the DF(Document Frequency) database automatically.
+If 1 is specified, (open|close)s the WebDF(Document Frequency) database automatically.
+This option works when tfidf method is called.
 
-=item idf_type, api, appid, driver, df_file, expires_in, documents, Furl_HTTP
+=item guess_df => 0 || 1
+
+If df_file has the (Web)DF and it has not expired yet,
+it is used.
+
+If it is not so,
+
+1: guesses the DF based on the string length of $word.
+
+0: doesn't give TF*WebIDF weight.
+
+=item idf_type, api, appid, driver, df_file, expires_in, documents, Furl_HTTP, verbose
 
 See L<Lingua::JA::WebIDF>.
 
@@ -554,16 +647,17 @@ See L<Lingua::JA::WebIDF>.
 
 =head2 tfidf( $text || \%tf )
 
-Calculates TF*WebIDF score.
-If scalar value is set, MeCab separates the value into appropriate morphemes.
+Calculates TF*WebIDF weight.
+If scalar value is set,
+MeCab separates the value into appropriate morphemes.
 If you want to use other morphological analyzers, you have to set
-a hash reference which contains terms and their TF scores.
+a hash reference which contains terms and their TF(Term Frequency).
 
 =head2 tf($text)
 
-Calculates TF score via MeCab.
+Calculates TF(Term Frequency) via MeCab.
 
-=head2 idf, df, purge, db_open, db_close
+=head2 idf, df, db_open, db_close, purge
 
 See L<Lingua::JA::WebIDF>.
 
@@ -573,11 +667,11 @@ pawa E<lt>pawapawa@cpan.orgE<gt>
 
 =head1 SEE ALSO
 
+L<Lingua::JA::TermExtractor>
+
 L<Lingua::JA::WebIDF>
 
 L<Lingua::JA::WebIDF::Driver::TokyoTyrant>
-
-L<Lingua::JA::TermExtractor>
 
 =head1 LICENSE
 
